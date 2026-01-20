@@ -14,9 +14,6 @@ impl ThemeSelectorComponent {
     }
 
     pub fn render(&self, f: &mut Frame, area: Rect, config: &Config) {
-        let is_modified = config.is_modified_from_theme();
-        let modified_indicator = if is_modified { "*" } else { "" };
-
         // Get all available themes dynamically
         let available_themes = crate::ui::themes::ThemePresets::list_available_themes();
 
@@ -24,26 +21,19 @@ impl ThemeSelectorComponent {
         let content_width = area.width.saturating_sub(2); // Remove borders
 
         // Build theme options with auto-wrapping
+        // *Live* is always first and always selected (it's what we're editing)
         let mut lines = Vec::new();
-        let mut current_line = String::new();
-        let mut first_line = true;
+        let mut current_line = String::from("[✓] *Live*");
 
-        for (i, theme) in available_themes.iter().enumerate() {
-            let marker = if config.theme == *theme {
-                "[✓]"
-            } else {
-                "[ ]"
-            };
-            let theme_part = format!("{} {}", marker, theme);
-            let separator = if i == 0 { "" } else { "  " };
-            let part_with_sep = format!("{}{}", separator, theme_part);
+        for theme in available_themes.iter() {
+            let theme_part = format!("[ ] {}", theme);
+            let part_with_sep = format!("  {}", theme_part);
 
             // Check if this part fits in current line
             let would_fit = current_line.len() + part_with_sep.len() <= content_width as usize;
 
-            if would_fit || first_line {
+            if would_fit {
                 current_line.push_str(&part_with_sep);
-                first_line = false;
             } else {
                 // Start new line
                 lines.push(current_line);
@@ -59,9 +49,8 @@ impl ThemeSelectorComponent {
         let separator_display = format!("\nSeparator: \"{}\"", config.style.separator);
 
         let full_text = format!("{}{}", lines.join("\n"), separator_display);
-        let title = format!("Themes{}", modified_indicator);
         let theme_selector = Paragraph::new(full_text)
-            .block(Block::default().borders(Borders::ALL).title(title))
+            .block(Block::default().borders(Borders::ALL).title("Themes"))
             .wrap(ratatui::widgets::Wrap { trim: false });
         f.render_widget(theme_selector, area);
     }

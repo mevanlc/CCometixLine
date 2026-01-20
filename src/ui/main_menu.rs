@@ -1,5 +1,5 @@
 use crossterm::{
-    event::{self, Event, KeyCode, KeyEventKind},
+    event::{self, Event, KeyCode, KeyEventKind, KeyModifiers},
     execute,
     terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
 };
@@ -8,7 +8,7 @@ use ratatui::{
     layout::{Alignment, Constraint, Direction, Layout},
     style::{Color, Modifier, Style},
     text::{Line, Span, Text},
-    widgets::{Block, Borders, Clear, List, ListItem, ListState, Paragraph, Wrap},
+    widgets::{Block, Borders, Clear, Paragraph, Wrap},
     Frame, Terminal,
 };
 use std::io;
@@ -27,10 +27,17 @@ struct StatusMessage {
     is_error: bool,
 }
 
+/// Menu item with title and description
+struct MenuItem {
+    title: String,
+    description: String,
+    compact: bool, // If true, render as single line
+}
+
 #[derive(Debug)]
 pub enum MenuResult {
     LaunchConfigurator,
-    InitConfig,
+    InstallBinary,
     CheckConfig,
     Exit,
 }
@@ -80,10 +87,17 @@ impl MainMenu {
                 // Clear status message on any key press
                 self.status_message = None;
 
+                // Check for cancel (Esc, q, or Ctrl+C)
+                let is_cancel = key.code == KeyCode::Esc
+                    || key.code == KeyCode::Char('q')
+                    || (key.code == KeyCode::Char('c')
+                        && key.modifiers.contains(KeyModifiers::CONTROL));
+
+                if is_cancel {
+                    self.should_quit = true;
+                }
+
                 match key.code {
-                    KeyCode::Esc | KeyCode::Char('q') => {
-                        self.should_quit = true;
-                    }
                     KeyCode::Up => {
                         if self.selected_item > 0 {
                             self.selected_item -= 1;
@@ -111,13 +125,55 @@ impl MainMenu {
         }
     }
 
-    fn get_menu_items(&self) -> Vec<(&str, &str)> {
+    fn get_install_target_path() -> Option<std::path::PathBuf> {
+        dirs::home_dir().map(|home| home.join(".claude").join("ccline").join("ccline"))
+    }
+
+    fn is_binary_installed() -> bool {
+        Self::get_install_target_path()
+            .map(|p| p.exists())
+            .unwrap_or(false)
+    }
+
+    fn get_menu_items(&self) -> Vec<MenuItem> {
+        let (install_title, install_desc) = if Self::is_binary_installed() {
+            (
+                "Reinstall ccline binary".to_string(),
+                "Replace the installed binary with the currently running version".to_string(),
+            )
+        } else {
+            (
+                "Install ccline binary".to_string(),
+                "Copy this binary to ~/.claude/ccline/ccline".to_string(),
+            )
+        };
+
         vec![
-            (" Configuration Mode", "Enter TUI configuration interface"),
-            (" Initialize Config", "Create default configuration"),
-            (" Check Configuration", "Validate configuration file"),
-            (" About", "Show application information"),
-            (" Exit", "Exit CCometixLine"),
+            MenuItem {
+                title: "Configuration mode".to_string(),
+                description: "Customize icons, colors, info fields, and separators".to_string(),
+                compact: false,
+            },
+            MenuItem {
+                title: install_title,
+                description: install_desc,
+                compact: false,
+            },
+            MenuItem {
+                title: "Validate configuration".to_string(),
+                description: "Check your configuration for errors".to_string(),
+                compact: false,
+            },
+            MenuItem {
+                title: "About".to_string(),
+                description: "Show application information".to_string(),
+                compact: true,
+            },
+            MenuItem {
+                title: "Exit".to_string(),
+                description: String::new(),
+                compact: true,
+            },
         ]
     }
 
@@ -125,28 +181,8 @@ impl MainMenu {
         match self.selected_item {
             0 => Some(MenuResult::LaunchConfigurator),
             1 => {
-                // Initialize config and show result in footer
-                use crate::config::InitResult;
-                match crate::config::Config::init() {
-                    Ok(InitResult::Created(path)) => {
-                        self.status_message = Some(StatusMessage {
-                            message: format!("✓ Created config at {}", path.display()),
-                            is_error: false,
-                        });
-                    }
-                    Ok(InitResult::AlreadyExists(path)) => {
-                        self.status_message = Some(StatusMessage {
-                            message: format!("Config already exists at {}", path.display()),
-                            is_error: false,
-                        });
-                    }
-                    Err(e) => {
-                        self.status_message = Some(StatusMessage {
-                            message: format!("✗ Error: {}", e),
-                            is_error: true,
-                        });
-                    }
-                }
+                // Install binary to ~/.claude/ccline/ccline
+                self.install_binary();
                 None // Stay in menu
             }
             2 => {
@@ -184,23 +220,101 @@ impl MainMenu {
         }
     }
 
+    fn install_binary(&mut self) {
+        // Get current executable path
+        let current_exe = match std::env::current_exe() {
+            Ok(path) => path,
+            Err(e) => {
+                self.status_message = Some(StatusMessage {
+                    message: format!("✗ Failed to get executable path: {}", e),
+                    is_error: true,
+                });
+                return;
+            }
+        };
+
+        // Get target path ~/.claude/ccline/ccline
+        let target_path = match Self::get_install_target_path() {
+            Some(path) => path,
+            None => {
+                self.status_message = Some(StatusMessage {
+                    message: "✗ Failed to determine home directory".to_string(),
+                    is_error: true,
+                });
+                return;
+            }
+        };
+        let target_dir = target_path.parent().unwrap();
+
+        // Create directory if needed
+        if let Err(e) = std::fs::create_dir_all(&target_dir) {
+            self.status_message = Some(StatusMessage {
+                message: format!("✗ Failed to create directory: {}", e),
+                is_error: true,
+            });
+            return;
+        }
+
+        // Copy the binary
+        match std::fs::copy(&current_exe, &target_path) {
+            Ok(_) => {
+                // Make executable on Unix
+                #[cfg(unix)]
+                {
+                    use std::os::unix::fs::PermissionsExt;
+                    if let Ok(metadata) = std::fs::metadata(&target_path) {
+                        let mut perms = metadata.permissions();
+                        perms.set_mode(0o755);
+                        let _ = std::fs::set_permissions(&target_path, perms);
+                    }
+                }
+                self.status_message = Some(StatusMessage {
+                    message: format!("✓ Installed to {}", target_path.display()),
+                    is_error: false,
+                });
+            }
+            Err(e) => {
+                self.status_message = Some(StatusMessage {
+                    message: format!("✗ Failed to copy binary: {}", e),
+                    is_error: true,
+                });
+            }
+        }
+    }
+
     fn ui(&mut self, f: &mut Frame) {
         let size = f.area();
 
-        // Calculate footer height based on status message
-        let footer_height = if self.status_message.is_some() { 5 } else { 3 };
+        // Dark background for entire screen
+        let bg_block = Block::default().style(Style::default().bg(Color::Rgb(20, 20, 30)));
+        f.render_widget(bg_block, size);
 
-        // Main layout
+        // Calculate footer height based on status message
+        let footer_height = if self.status_message.is_some() { 4 } else { 2 };
+
+        // Main layout - vertical
         let main_layout = Layout::default()
             .direction(Direction::Vertical)
             .constraints([
-                Constraint::Length(5),             // Header
-                Constraint::Min(10),               // Menu
+                Constraint::Length(4),             // Header
+                Constraint::Min(10),               // Menu cards
                 Constraint::Length(footer_height), // Footer/Help
             ])
             .split(size);
 
-        // Header
+        // Center the content horizontally (70% width, centered)
+        let center_layout = Layout::default()
+            .direction(Direction::Horizontal)
+            .constraints([
+                Constraint::Percentage(15),
+                Constraint::Percentage(70),
+                Constraint::Percentage(15),
+            ])
+            .split(main_layout[1]);
+
+        let card_area = center_layout[1];
+
+        // Header - centered title
         let header_text = Text::from(vec![
             Line::from(vec![
                 Span::styled(
@@ -209,85 +323,126 @@ impl MainMenu {
                         .fg(Color::Cyan)
                         .add_modifier(Modifier::BOLD),
                 ),
-                Span::styled(" v", Style::default().fg(Color::Gray)),
+                Span::styled(" v", Style::default().fg(Color::DarkGray)),
                 Span::styled(
                     env!("CARGO_PKG_VERSION"),
                     Style::default().fg(Color::Yellow),
                 ),
             ]),
-            Line::from(""),
             Line::from(Span::styled(
-                "High-performance Claude Code StatusLine Configuration",
-                Style::default().fg(Color::Gray),
+                "High-performance Claude Code StatusLine",
+                Style::default().fg(Color::DarkGray),
             )),
         ]);
 
-        let header = Paragraph::new(header_text)
-            .block(Block::default().borders(Borders::ALL).title("Welcome"))
-            .alignment(Alignment::Center)
-            .wrap(Wrap { trim: true });
-
+        let header = Paragraph::new(header_text).alignment(Alignment::Center);
         f.render_widget(header, main_layout[0]);
 
-        // Menu
+        // Menu cards
         let menu_items = self.get_menu_items();
-        let list_items: Vec<ListItem> = menu_items
-            .iter()
-            .enumerate()
-            .map(|(i, (title, desc))| {
-                let style = if i == self.selected_item {
-                    Style::default().fg(Color::Black).bg(Color::Cyan)
-                } else {
-                    Style::default().fg(Color::White)
-                };
 
-                let content = Line::from(vec![
-                    Span::styled(*title, style),
-                    Span::styled(format!(" - {}", desc), Style::default().fg(Color::Gray)),
-                ]);
+        // Calculate card heights: 4 for all cards (2 content lines + 2 border lines)
+        // Add 1-line spacers between cards
+        let mut constraints: Vec<Constraint> = Vec::new();
+        for (i, _item) in menu_items.iter().enumerate() {
+            if i > 0 {
+                constraints.push(Constraint::Length(1)); // Spacer between cards
+            }
+            constraints.push(Constraint::Length(4));
+        }
+        constraints.push(Constraint::Min(0)); // Spacer at bottom
 
-                ListItem::new(content).style(style)
-            })
-            .collect();
+        let card_layout = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints(constraints)
+            .split(card_area);
 
-        let menu_list = List::new(list_items)
-            .block(
-                Block::default()
-                    .borders(Borders::ALL)
-                    .title("Main Menu")
-                    .title_style(Style::default().fg(Color::Green)),
-            )
-            .highlight_style(Style::default().bg(Color::Cyan).fg(Color::Black))
-            .highlight_symbol("▶ ");
+        // Render each card (accounting for spacer indices)
+        let mut layout_idx = 0;
+        for (i, item) in menu_items.iter().enumerate() {
+            if i > 0 {
+                layout_idx += 1; // Skip spacer
+            }
 
-        let mut list_state = ListState::default();
-        list_state.select(Some(self.selected_item));
+            let is_selected = i == self.selected_item;
 
-        f.render_stateful_widget(menu_list, main_layout[1], &mut list_state);
+            let (border_color, title_color, bg_color) = if is_selected {
+                (Color::Cyan, Color::Cyan, Color::Rgb(40, 40, 60))
+            } else {
+                (Color::DarkGray, Color::White, Color::Rgb(30, 30, 45))
+            };
 
-        // Footer/Help - with optional status message
+            // Diagonal selector chars for selected item
+            let (sel1, sel2) = if is_selected {
+                (
+                    Span::styled("╲ ", Style::default().fg(Color::Yellow)),
+                    Span::styled("╱ ", Style::default().fg(Color::Yellow)),
+                )
+            } else {
+                (
+                    Span::styled("  ", Style::default()),
+                    Span::styled("  ", Style::default()),
+                )
+            };
+
+            let card_content = if item.compact {
+                // Two lines for compact items (title + empty line for selector to fit)
+                Text::from(vec![
+                    Line::from(vec![
+                        sel1,
+                        Span::styled(
+                            item.title.as_str(),
+                            Style::default()
+                                .fg(title_color)
+                                .add_modifier(if is_selected {
+                                    Modifier::BOLD
+                                } else {
+                                    Modifier::empty()
+                                }),
+                        ),
+                    ]),
+                    Line::from(vec![sel2]),
+                ])
+            } else {
+                // Two lines: title + description with diagonal selectors
+                Text::from(vec![
+                    Line::from(vec![
+                        sel1,
+                        Span::styled(
+                            item.title.as_str(),
+                            Style::default()
+                                .fg(title_color)
+                                .add_modifier(Modifier::BOLD),
+                        ),
+                    ]),
+                    Line::from(vec![
+                        sel2,
+                        Span::styled(item.description.as_str(), Style::default().fg(Color::Gray)),
+                    ]),
+                ])
+            };
+
+            let card = Paragraph::new(card_content)
+                .block(
+                    Block::default()
+                        .borders(Borders::ALL)
+                        .border_style(Style::default().fg(border_color))
+                        .style(Style::default().bg(bg_color)),
+                )
+                .alignment(Alignment::Left);
+
+            f.render_widget(card, card_layout[layout_idx]);
+            layout_idx += 1;
+        }
+
+        // Footer - minimal, centered
         let mut footer_lines = vec![Line::from(vec![
-            Span::styled(
-                "[↑↓]",
-                Style::default()
-                    .fg(Color::Yellow)
-                    .add_modifier(Modifier::BOLD),
-            ),
-            Span::styled(" Navigate  ", Style::default().fg(Color::Gray)),
-            Span::styled(
-                "[Enter]",
-                Style::default()
-                    .fg(Color::Yellow)
-                    .add_modifier(Modifier::BOLD),
-            ),
-            Span::styled(" Select  ", Style::default().fg(Color::Gray)),
-            Span::styled(
-                "[Esc/Q]",
-                Style::default()
-                    .fg(Color::Yellow)
-                    .add_modifier(Modifier::BOLD),
-            ),
-            Span::styled(" Exit", Style::default().fg(Color::Gray)),
+            Span::styled("[↑↓]", Style::default().fg(Color::Yellow)),
+            Span::styled(" Navigate  ", Style::default().fg(Color::DarkGray)),
+            Span::styled("[Enter]", Style::default().fg(Color::Yellow)),
+            Span::styled(" Select  ", Style::default().fg(Color::DarkGray)),
+            Span::styled("[Esc]", Style::default().fg(Color::Yellow)),
+            Span::styled(" Exit", Style::default().fg(Color::DarkGray)),
         ])];
 
         // Add status message if present
@@ -297,17 +452,13 @@ impl MainMenu {
             } else {
                 Color::Green
             };
-            footer_lines.push(Line::from(""));
             footer_lines.push(Line::from(Span::styled(
                 status.message.as_str(),
                 Style::default().fg(color),
             )));
         }
 
-        let footer = Paragraph::new(Text::from(footer_lines))
-            .block(Block::default().borders(Borders::ALL).title("Help"))
-            .alignment(Alignment::Center);
-
+        let footer = Paragraph::new(Text::from(footer_lines)).alignment(Alignment::Center);
         f.render_widget(footer, main_layout[2]);
 
         // About dialog overlay
