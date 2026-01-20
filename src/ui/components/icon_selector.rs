@@ -207,15 +207,31 @@ impl IconSelectorComponent {
         let inner = popup_block.inner(popup_area);
         f.render_widget(popup_block, popup_area);
 
-        let chunks = Layout::default()
-            .direction(Direction::Vertical)
-            .constraints([
-                Constraint::Length(3), // Style selector (需要3行：上边框+内容+下边框)
-                Constraint::Min(10),   // Icon grid
-                Constraint::Length(3), // Custom input
-                Constraint::Length(3), // Actions
-            ])
-            .split(inner);
+        // Layout depends on whether we show the warning (Nerd Font mode)
+        let show_warning = self.icon_style == IconStyle::NerdFont;
+
+        let chunks = if show_warning {
+            Layout::default()
+                .direction(Direction::Vertical)
+                .constraints([
+                    Constraint::Length(3), // Style selector
+                    Constraint::Min(10),   // Icon grid
+                    Constraint::Length(4), // Warning box
+                    Constraint::Length(3), // Custom input
+                    Constraint::Length(3), // Actions
+                ])
+                .split(inner)
+        } else {
+            Layout::default()
+                .direction(Direction::Vertical)
+                .constraints([
+                    Constraint::Length(3), // Style selector
+                    Constraint::Min(10),   // Icon grid
+                    Constraint::Length(3), // Custom input
+                    Constraint::Length(3), // Actions
+                ])
+                .split(inner)
+        };
 
         // Style selector
         let style_text = match self.icon_style {
@@ -234,6 +250,22 @@ impl IconSelectorComponent {
             IconStyle::NerdFont => self.render_nerd_icons(f, chunks[1]),
         }
 
+        // Warning box (only for Nerd Font mode)
+        let (custom_chunk, actions_chunk) = if show_warning {
+            // Render warning
+            let warning_text = "Nerd Font / Powerline symbols can cause rendering issues on some Claude Code versions. If you encounter trouble, try Emoji symbols instead.";
+            f.render_widget(
+                Paragraph::new(warning_text)
+                    .style(Style::default().fg(Color::Yellow))
+                    .wrap(ratatui::widgets::Wrap { trim: true })
+                    .block(Block::default().borders(Borders::ALL).title("Warning")),
+                chunks[2],
+            );
+            (chunks[3], chunks[4])
+        } else {
+            (chunks[2], chunks[3])
+        };
+
         // Custom input
         let custom_text = if self.editing_custom {
             format!("> {} <", self.custom_input)
@@ -249,7 +281,7 @@ impl IconSelectorComponent {
                     Style::default()
                 })
                 .block(Block::default().borders(Borders::ALL).title("Custom")),
-            chunks[2],
+            custom_chunk,
         );
 
         // Actions
@@ -261,7 +293,7 @@ impl IconSelectorComponent {
 
         f.render_widget(
             Paragraph::new(actions).block(Block::default().borders(Borders::ALL)),
-            chunks[3],
+            actions_chunk,
         );
     }
 

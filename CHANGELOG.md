@@ -12,6 +12,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 - **Main Menu Redesign**: Card-based layout with dark background, diagonal selector indicators
+- **Configuration Mode Redesign**: Fuller preview showing simulated Claude Code context; 3-column layout (Segments, Settings, Themes); Separator field moved below segments list
 - **Config Auto-Init**: Config file is now automatically created from default theme on startup if missing
 - **Config/Theme Refactor**: *Live* config is now the single source of truth; themes are templates only
 - **Simplified Save Menu**: Ctrl+S now offers 2 options: "Overwrite *Live*" and "Save as named Theme"

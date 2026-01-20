@@ -19,8 +19,6 @@ use crossterm::{
 use ratatui::{
     backend::CrosstermBackend,
     layout::{Constraint, Direction, Layout},
-    style::{Color, Style},
-    widgets::{Block, Borders, Paragraph},
     Frame, Terminal,
 };
 use std::io;
@@ -107,6 +105,7 @@ impl App {
                 if app.name_input.is_open {
                     if is_cancel {
                         app.name_input.close();
+                        app.save_menu.close(); // Also close save menu if open
                     } else {
                         match key.code {
                             KeyCode::Enter => {
@@ -114,6 +113,7 @@ impl App {
                                     app.save_as_new_theme(&name);
                                 }
                                 app.name_input.close();
+                                app.save_menu.close(); // Also close save menu
                             }
                             KeyCode::Char(c) => app.name_input.input_char(c),
                             KeyCode::Backspace => app.name_input.backspace(),
@@ -205,9 +205,9 @@ impl App {
                             KeyCode::Down => app.save_menu.move_selection(1),
                             KeyCode::Enter => {
                             let action = app.save_menu.get_selected_action();
-                            app.save_menu.close();
                             match action {
                                 SaveAction::SaveLive => {
+                                    app.save_menu.close();
                                     if let Err(e) = app.save_config() {
                                         app.status_message =
                                             Some(format!("Failed to save: {}", e));
@@ -217,6 +217,7 @@ impl App {
                                     }
                                 }
                                 SaveAction::SaveAsNewTheme => {
+                                    // Keep menu open, open name input on top
                                     app.name_input.open("Save as Theme", "Enter theme name");
                                 }
                             }
@@ -269,36 +270,6 @@ impl App {
         terminal.show_cursor()?;
 
         result
-    }
-
-    fn calculate_theme_selector_height(&self, total_width: u16) -> u16 {
-        // Get all available themes dynamically
-        let available_themes = crate::ui::themes::ThemePresets::list_available_themes();
-
-        // Calculate available width (minus borders only)
-        let content_width = total_width.saturating_sub(2); // Remove borders
-
-        // Simulate the line wrapping logic (matches theme_selector.rs)
-        // *Live* is always first and checked
-        let mut line_count = 1;
-        let mut current_line_length = "[✓] *Live*".len();
-
-        for theme in available_themes.iter() {
-            let theme_part = format!("[ ] {}", theme);
-            let part_with_sep = format!("  {}", theme_part);
-
-            let would_fit = current_line_length + part_with_sep.len() <= content_width as usize;
-
-            if would_fit {
-                current_line_length += part_with_sep.len();
-            } else {
-                line_count += 1;
-                current_line_length = theme_part.len();
-            }
-        }
-
-        // Return height: content lines + borders (top + bottom) + separator line
-        line_count + 3
     }
 
     fn calculate_help_height(&self, total_width: u16) -> u16 {
@@ -363,17 +334,14 @@ impl App {
     }
 
     fn ui(&mut self, f: &mut Frame) {
-        // Calculate required heights for dynamic sections (using full width as estimate)
-        let theme_selector_height = self.calculate_theme_selector_height(f.area().width);
+        // Calculate required height for help
         let help_height = self.calculate_help_height(f.area().width);
 
         // Initial layout to measure preview width
         let initial_layout = Layout::default()
             .direction(Direction::Vertical)
             .constraints([
-                Constraint::Length(3),                     // Title
-                Constraint::Min(3),                        // Preview (dynamic - will recalculate)
-                Constraint::Length(theme_selector_height), // Theme selector (dynamic)
+                Constraint::Min(15),                       // Preview (dynamic - will recalculate)
                 Constraint::Min(10),                       // Main content
                 Constraint::Length(help_height),           // Help (dynamic)
             ])
@@ -381,7 +349,7 @@ impl App {
 
         // Update preview with measured width
         self.preview
-            .update_preview_with_width(&self.config, initial_layout[1].width);
+            .update_preview_with_width(&self.config, initial_layout[0].width);
 
         // Calculate actual preview height after content update
         let preview_height = self.preview.calculate_height();
@@ -390,42 +358,26 @@ impl App {
         let layout = Layout::default()
             .direction(Direction::Vertical)
             .constraints([
-                Constraint::Length(3),                     // Title
                 Constraint::Length(preview_height),        // Preview (dynamic)
-                Constraint::Length(theme_selector_height), // Theme selector (dynamic)
                 Constraint::Min(10),                       // Main content
                 Constraint::Length(help_height),           // Help (dynamic)
             ])
             .split(f.area());
 
-        // Title
-        let title_text = format!("CCometixLine Configurator v{}", env!("CARGO_PKG_VERSION"));
-        let title = Paragraph::new(title_text)
-            .block(Block::default().borders(Borders::ALL))
-            .style(Style::default().fg(Color::Cyan))
-            .alignment(ratatui::layout::Alignment::Center);
-        f.render_widget(title, layout[0]);
-
-        // Preview - use TUI-optimized statusline generation with smart segment wrapping
-        // Update preview if layout width differs from initial measurement
-        if layout[1].width != initial_layout[1].width {
-            self.preview
-                .update_preview_with_width(&self.config, layout[1].width);
-        }
-
         // Render preview
-        self.preview.render(f, layout[1]);
+        self.preview.render(f, layout[0]);
 
-        // Theme selector
-        self.theme_selector.render(f, layout[2], &self.config);
-
-        // Main content (split horizontally)
+        // Main content (split into 3 columns: Segments, Settings, Themes)
         let content_layout = Layout::default()
             .direction(Direction::Horizontal)
-            .constraints([Constraint::Percentage(30), Constraint::Percentage(70)])
-            .split(layout[3]);
+            .constraints([
+                Constraint::Percentage(25),  // Segments
+                Constraint::Percentage(50),  // Settings
+                Constraint::Percentage(25),  // Themes
+            ])
+            .split(layout[1]);
 
-        // Segment list
+        // Segment list (with separator above)
         self.segment_list.render(
             f,
             content_layout[0],
@@ -444,10 +396,13 @@ impl App {
             &self.selected_field,
         );
 
+        // Themes panel (0 = *Live*, 1+ = themes from list)
+        self.theme_selector.render(f, content_layout[2], &self.config, self.theme_cycle_index);
+
         // Help
         self.help.render(
             f,
-            layout[4],
+            layout[2],
             self.status_message.as_deref(),
             self.color_picker.is_open,
             self.icon_selector.is_open,
@@ -635,14 +590,21 @@ impl App {
 
     fn cycle_theme(&mut self) {
         let themes = crate::ui::themes::ThemePresets::list_available_themes();
-        if themes.is_empty() {
-            return;
-        }
-        self.theme_cycle_index = (self.theme_cycle_index + 1) % themes.len();
-        let next_theme = &themes[self.theme_cycle_index];
+        // Cycle includes *Live* (index 0) plus all themes (index 1+)
+        let total_options = themes.len() + 1;
+        self.theme_cycle_index = (self.theme_cycle_index + 1) % total_options;
 
-        self.status_message = Some(format!("Loading theme: {}", next_theme));
-        self.switch_to_theme(next_theme);
+        if self.theme_cycle_index == 0 {
+            // *Live* - reload from config.toml
+            self.config = Config::load().unwrap_or_else(|_| Config::default());
+            self.preview.update_preview(&self.config);
+            self.status_message = Some("Reloaded *Live* config".to_string());
+        } else {
+            // Theme from list (1-indexed)
+            let theme_name = &themes[self.theme_cycle_index - 1];
+            self.status_message = Some(format!("Loading theme: {}", theme_name));
+            self.switch_to_theme(theme_name);
+        }
     }
 
     fn switch_to_theme(&mut self, theme_name: &str) {

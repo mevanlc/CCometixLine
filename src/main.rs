@@ -103,17 +103,20 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         {
             use ccometixline::ui::{MainMenu, MenuResult};
 
-            if let Some(result) = MainMenu::run()? {
-                match result {
-                    MenuResult::LaunchConfigurator => {
+            // Loop to return to main menu after configurator exits
+            loop {
+                match MainMenu::run()? {
+                    Some(MenuResult::LaunchConfigurator) => {
                         ccometixline::ui::run_configurator()?;
+                        // After configurator exits (Esc), loop back to main menu
                     }
-                    MenuResult::InstallBinary | MenuResult::CheckConfig => {
+                    Some(MenuResult::InstallBinary | MenuResult::CheckConfig) => {
                         // These are handled internally by the menu
                         // and should not be returned, but handle gracefully
                     }
-                    MenuResult::Exit => {
+                    Some(MenuResult::Exit) | None => {
                         // Exit gracefully
+                        break;
                     }
                 }
             }
