@@ -113,19 +113,55 @@ impl ConfigLoader {
 
 impl Config {
     /// Load configuration from default location
+    /// If config.toml doesn't exist, creates it from default theme (or first available)
     pub fn load() -> Result<Config, Box<dyn std::error::Error>> {
         // Ensure themes directory exists and has built-in themes
         ConfigLoader::ensure_themes_exist();
 
         let config_path = Self::get_config_path();
 
+        // If config.toml doesn't exist, create it from a theme template
         if !config_path.exists() {
-            return Ok(Config::default());
+            Self::create_config_from_theme()?;
         }
 
-        let content = fs::read_to_string(config_path)?;
+        let content = fs::read_to_string(&config_path)?;
         let config: Config = toml::from_str(&content)?;
         Ok(config)
+    }
+
+    /// Create config.toml from default theme (or first available theme)
+    fn create_config_from_theme() -> Result<(), Box<dyn std::error::Error>> {
+        let config_path = Self::get_config_path();
+        let themes_dir = ConfigLoader::get_themes_path();
+
+        // Ensure config directory exists
+        if let Some(parent) = config_path.parent() {
+            fs::create_dir_all(parent)?;
+        }
+
+        // Try default.toml first
+        let default_theme_path = themes_dir.join("default.toml");
+        if default_theme_path.exists() {
+            fs::copy(&default_theme_path, &config_path)?;
+            return Ok(());
+        }
+
+        // Otherwise, use first available .toml file in themes directory
+        if let Ok(entries) = fs::read_dir(&themes_dir) {
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if path.extension().map_or(false, |ext| ext == "toml") {
+                    fs::copy(&path, &config_path)?;
+                    return Ok(());
+                }
+            }
+        }
+
+        // Last resort: create from built-in default
+        let default_config = Config::default();
+        default_config.save()?;
+        Ok(())
     }
 
     /// Save configuration to default location

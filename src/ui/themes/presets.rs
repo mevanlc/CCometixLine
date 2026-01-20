@@ -42,11 +42,7 @@ impl ThemePresets {
         }
 
         let content = std::fs::read_to_string(&theme_path)?;
-        let mut config: Config = toml::from_str(&content)?;
-
-        // Ensure the theme field matches the requested theme
-        config.theme = theme_name.to_string();
-
+        let config: Config = toml::from_str(&content)?;
         Ok(config)
     }
 
@@ -67,11 +63,7 @@ impl ThemePresets {
         // Create themes directory if it doesn't exist
         std::fs::create_dir_all(&themes_dir)?;
 
-        // Create a copy of config with the correct theme name
-        let mut theme_config = config.clone();
-        theme_config.theme = theme_name.to_string();
-
-        let content = toml::to_string_pretty(&theme_config)?;
+        let content = toml::to_string_pretty(config)?;
         std::fs::write(&theme_path, content)?;
 
         Ok(())

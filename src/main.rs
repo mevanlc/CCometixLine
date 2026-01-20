@@ -103,17 +103,20 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         {
             use ccometixline::ui::{MainMenu, MenuResult};
 
-            if let Some(result) = MainMenu::run()? {
-                match result {
-                    MenuResult::LaunchConfigurator => {
+            // Loop to return to main menu after configurator exits
+            loop {
+                match MainMenu::run()? {
+                    Some(MenuResult::LaunchConfigurator) => {
                         ccometixline::ui::run_configurator()?;
+                        // After configurator exits (Esc), loop back to main menu
                     }
-                    MenuResult::InitConfig | MenuResult::CheckConfig => {
-                        // These are now handled internally by the menu
+                    Some(MenuResult::InstallBinary | MenuResult::CheckConfig) => {
+                        // These are handled internally by the menu
                         // and should not be returned, but handle gracefully
                     }
-                    MenuResult::Exit => {
+                    Some(MenuResult::Exit) | None => {
                         // Exit gracefully
+                        break;
                     }
                 }
             }
@@ -138,7 +141,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let generator = StatusLineGenerator::new(config);
     let statusline = generator.generate(segments_data);
 
-    println!("{}", statusline);
+    // Always emit a reset sequence to ensure terminal state is clean
+    // This prevents color/style leakage that can cause rendering glitches
+    println!("{}\x1b[0m", statusline);
 
     Ok(())
 }

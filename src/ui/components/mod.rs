@@ -4,6 +4,7 @@ pub mod help;
 pub mod icon_selector;
 pub mod name_input;
 pub mod preview;
+pub mod save_menu;
 pub mod segment_list;
 pub mod separator_editor;
 pub mod settings;

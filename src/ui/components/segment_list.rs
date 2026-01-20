@@ -1,9 +1,9 @@
 use crate::config::{Config, SegmentId};
 use ratatui::{
-    layout::Rect,
-    style::{Color, Style},
+    layout::{Constraint, Direction, Layout, Rect},
+    style::{Color, Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, Borders, List, ListItem},
+    widgets::{Block, Borders, List, ListItem, Paragraph},
     Frame,
 };
 
@@ -40,6 +40,16 @@ impl SegmentListComponent {
         selected_segment: usize,
         selected_panel: &Panel,
     ) {
+        // Split area: segment list + separator (3 lines)
+        let layout = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([
+                Constraint::Min(5),     // Segment list
+                Constraint::Length(3),  // Separator display
+            ])
+            .split(area);
+
+        // Segment list
         let items: Vec<ListItem> = config
             .segments
             .iter()
@@ -80,6 +90,21 @@ impl SegmentListComponent {
                 Style::default()
             });
         let segments_list = List::new(items).block(segments_block);
-        f.render_widget(segments_list, area);
+        f.render_widget(segments_list, layout[0]);
+
+        // Separator display with titled border
+        let separator_text = Line::from(vec![
+            Span::styled(
+                format!(" \"{}\"", config.style.separator),
+                Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD),
+            ),
+        ]);
+        let separator_widget = Paragraph::new(separator_text)
+            .block(
+                Block::default()
+                    .borders(Borders::ALL)
+                    .title("Separator [E]")
+            );
+        f.render_widget(separator_widget, layout[1]);
     }
 }

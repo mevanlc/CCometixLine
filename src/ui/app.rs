@@ -5,6 +5,7 @@ use crate::ui::components::{
     icon_selector::IconSelectorComponent,
     name_input::NameInputComponent,
     preview::PreviewComponent,
+    save_menu::{SaveAction, SaveMenuComponent},
     segment_list::{FieldSelection, Panel, SegmentListComponent},
     separator_editor::SeparatorEditorComponent,
     settings::SettingsComponent,
@@ -18,8 +19,6 @@ use crossterm::{
 use ratatui::{
     backend::CrosstermBackend,
     layout::{Constraint, Direction, Layout},
-    style::{Color, Style},
-    widgets::{Block, Borders, Paragraph},
     Frame, Terminal,
 };
 use std::io;
@@ -34,12 +33,14 @@ pub struct App {
     icon_selector: IconSelectorComponent,
     name_input: NameInputComponent,
     preview: PreviewComponent,
+    save_menu: SaveMenuComponent,
     segment_list: SegmentListComponent,
     separator_editor: SeparatorEditorComponent,
     settings: SettingsComponent,
     theme_selector: ThemeSelectorComponent,
     help: HelpComponent,
     status_message: Option<String>,
+    theme_cycle_index: usize,
 }
 
 impl App {
@@ -54,12 +55,14 @@ impl App {
             icon_selector: IconSelectorComponent::new(),
             name_input: NameInputComponent::new(),
             preview: PreviewComponent::new(),
+            save_menu: SaveMenuComponent::new(),
             segment_list: SegmentListComponent::new(),
             separator_editor: SeparatorEditorComponent::new(),
             settings: SettingsComponent::new(),
             theme_selector: ThemeSelectorComponent::new(),
             help: HelpComponent::new(),
             status_message: None,
+            theme_cycle_index: 0,
         };
         app.preview.update_preview(&config);
         app
@@ -71,17 +74,8 @@ impl App {
             eprintln!("Warning: Failed to initialize themes: {}", e);
         }
 
-        // Load config
-        let mut config = Config::load().unwrap_or_else(|_| Config::default());
-
-        // If a theme is specified, reload it to get the latest changes
-        if !config.theme.is_empty() && config.theme != "default" {
-            if let Ok(theme_config) =
-                crate::ui::themes::ThemePresets::load_theme_from_file(&config.theme)
-            {
-                config = theme_config;
-            }
-        }
+        // Load config (config.toml is the "*Live*" config - always the source of truth)
+        let config = Config::load().unwrap_or_else(|_| Config::default());
 
         // Terminal setup
         enable_raw_mode()?;
@@ -102,109 +96,144 @@ impl App {
                     continue;
                 }
 
+                // Helper to check for cancel keys (Esc or Ctrl+C)
+                let is_cancel = key.code == KeyCode::Esc
+                    || (key.code == KeyCode::Char('c')
+                        && key.modifiers.contains(KeyModifiers::CONTROL));
+
                 // Handle popup events first
                 if app.name_input.is_open {
-                    match key.code {
-                        KeyCode::Esc => app.name_input.close(),
-                        KeyCode::Enter => {
-                            if let Some(name) = app.name_input.get_input() {
-                                app.save_as_new_theme(&name);
+                    if is_cancel {
+                        app.name_input.close();
+                        app.save_menu.close(); // Also close save menu if open
+                    } else {
+                        match key.code {
+                            KeyCode::Enter => {
+                                if let Some(name) = app.name_input.get_input() {
+                                    app.save_as_new_theme(&name);
+                                }
+                                app.name_input.close();
+                                app.save_menu.close(); // Also close save menu
                             }
-                            app.name_input.close();
+                            KeyCode::Char(c) => app.name_input.input_char(c),
+                            KeyCode::Backspace => app.name_input.backspace(),
+                            _ => {}
                         }
-                        KeyCode::Char(c) => app.name_input.input_char(c),
-                        KeyCode::Backspace => app.name_input.backspace(),
-                        _ => {}
                     }
                 } else if app.separator_editor.is_open {
-                    match key.code {
-                        KeyCode::Esc => app.separator_editor.close(),
-                        KeyCode::Enter => {
-                            let new_separator = app.separator_editor.get_separator();
-                            app.config.style.separator = new_separator;
-                            app.separator_editor.close();
-                            app.preview.update_preview(&app.config);
-                            app.status_message = Some("Separator updated!".to_string());
+                    if is_cancel {
+                        app.separator_editor.close();
+                    } else {
+                        match key.code {
+                            KeyCode::Enter => {
+                                let new_separator = app.separator_editor.get_separator();
+                                app.config.style.separator = new_separator;
+                                app.separator_editor.close();
+                                app.preview.update_preview(&app.config);
+                                app.status_message = Some("Separator updated!".to_string());
+                            }
+                            KeyCode::Tab => {
+                                app.separator_editor.input.clear();
+                                app.separator_editor.selected_preset = None;
+                            }
+                            KeyCode::Up => app.separator_editor.move_preset_selection(-1),
+                            KeyCode::Down => app.separator_editor.move_preset_selection(1),
+                            KeyCode::Char(c) => app.separator_editor.input_char(c),
+                            KeyCode::Backspace => app.separator_editor.backspace(),
+                            _ => {}
                         }
-                        KeyCode::Tab => {
-                            app.separator_editor.input.clear();
-                            app.separator_editor.selected_preset = None;
-                        }
-                        KeyCode::Up => app.separator_editor.move_preset_selection(-1),
-                        KeyCode::Down => app.separator_editor.move_preset_selection(1),
-                        KeyCode::Char(c) => app.separator_editor.input_char(c),
-                        KeyCode::Backspace => app.separator_editor.backspace(),
-                        _ => {}
                     }
                 } else if app.color_picker.is_open {
-                    match key.code {
-                        KeyCode::Esc => app.color_picker.close(),
-                        KeyCode::Up => app.color_picker.move_direction(NavDirection::Up),
-                        KeyCode::Down => app.color_picker.move_direction(NavDirection::Down),
-                        KeyCode::Left => app.color_picker.move_direction(NavDirection::Left),
-                        KeyCode::Right => app.color_picker.move_direction(NavDirection::Right),
-                        KeyCode::Tab => app.color_picker.cycle_mode(),
-                        KeyCode::Char('r') => app.color_picker.switch_to_rgb(),
-                        KeyCode::Enter => {
-                            if let Some(color) = app.color_picker.get_selected_color() {
-                                app.apply_selected_color(color);
+                    if is_cancel {
+                        app.color_picker.close();
+                    } else {
+                        match key.code {
+                            KeyCode::Up => app.color_picker.move_direction(NavDirection::Up),
+                            KeyCode::Down => app.color_picker.move_direction(NavDirection::Down),
+                            KeyCode::Left => app.color_picker.move_direction(NavDirection::Left),
+                            KeyCode::Right => app.color_picker.move_direction(NavDirection::Right),
+                            KeyCode::Tab => app.color_picker.cycle_mode(),
+                            KeyCode::Char('r') => app.color_picker.switch_to_rgb(),
+                            KeyCode::Enter => {
+                                if let Some(color) = app.color_picker.get_selected_color() {
+                                    app.apply_selected_color(color);
+                                }
+                                app.color_picker.close();
                             }
-                            app.color_picker.close();
+                            KeyCode::Char(c) => app.color_picker.input_char(c),
+                            KeyCode::Backspace => app.color_picker.backspace(),
+                            _ => {}
                         }
-                        KeyCode::Char(c) => app.color_picker.input_char(c),
-                        KeyCode::Backspace => app.color_picker.backspace(),
-                        _ => {}
                     }
                 } else if app.icon_selector.is_open {
-                    match key.code {
-                        KeyCode::Esc => app.icon_selector.close(),
-                        KeyCode::Up => app.icon_selector.move_selection(-1),
-                        KeyCode::Down => app.icon_selector.move_selection(1),
-                        KeyCode::Tab => app.icon_selector.toggle_style(),
-                        KeyCode::Char('c') if !app.icon_selector.editing_custom => {
-                            app.icon_selector.start_custom_input()
-                        }
-                        KeyCode::Enter => {
-                            if app.icon_selector.editing_custom
-                                && !app.icon_selector.finish_custom_input()
-                            {
-                                continue;
+                    if is_cancel {
+                        app.icon_selector.close();
+                    } else {
+                        match key.code {
+                            KeyCode::Up => app.icon_selector.move_selection(-1),
+                            KeyCode::Down => app.icon_selector.move_selection(1),
+                            KeyCode::Tab => app.icon_selector.toggle_style(),
+                            KeyCode::Char('c') if !app.icon_selector.editing_custom => {
+                                app.icon_selector.start_custom_input()
                             }
-                            if let Some(icon) = app.icon_selector.get_selected_icon() {
-                                app.apply_selected_icon(icon);
+                            KeyCode::Enter => {
+                                if app.icon_selector.editing_custom
+                                    && !app.icon_selector.finish_custom_input()
+                                {
+                                    continue;
+                                }
+                                if let Some(icon) = app.icon_selector.get_selected_icon() {
+                                    app.apply_selected_icon(icon);
+                                }
+                                app.icon_selector.close();
                             }
-                            app.icon_selector.close();
+                            KeyCode::Char(c) if app.icon_selector.editing_custom => {
+                                app.icon_selector.input_char(c);
+                            }
+                            KeyCode::Backspace if app.icon_selector.editing_custom => {
+                                app.icon_selector.backspace();
+                            }
+                            _ => {}
                         }
-                        KeyCode::Char(c) if app.icon_selector.editing_custom => {
-                            app.icon_selector.input_char(c);
+                    }
+                } else if app.save_menu.is_open {
+                    if is_cancel {
+                        app.save_menu.close();
+                    } else {
+                        match key.code {
+                            KeyCode::Up => app.save_menu.move_selection(-1),
+                            KeyCode::Down => app.save_menu.move_selection(1),
+                            KeyCode::Enter => {
+                            let action = app.save_menu.get_selected_action();
+                            match action {
+                                SaveAction::SaveLive => {
+                                    app.save_menu.close();
+                                    if let Err(e) = app.save_config() {
+                                        app.status_message =
+                                            Some(format!("Failed to save: {}", e));
+                                    } else {
+                                        app.status_message =
+                                            Some("*Live* config saved!".to_string());
+                                    }
+                                }
+                                SaveAction::SaveAsNewTheme => {
+                                    // Keep menu open, open name input on top
+                                    app.name_input.open("Save as Theme", "Enter theme name");
+                                }
+                            }
+                            }
+                            _ => {}
                         }
-                        KeyCode::Backspace if app.icon_selector.editing_custom => {
-                            app.icon_selector.backspace();
-                        }
-                        _ => {}
                     }
                 } else {
                     // Handle main app events
-                    match key.code {
-                        KeyCode::Esc => app.should_quit = true,
-                        KeyCode::Char('s') => {
-                            if key.modifiers.contains(KeyModifiers::CONTROL) {
-                                // Ctrl+S: Save as new theme with name input
-                                app.name_input.open("Save as New Theme", "Enter theme name");
-                            } else {
-                                // s: Save config to config.toml
-                                if let Err(e) = app.save_config() {
-                                    app.status_message =
-                                        Some(format!("Failed to save config: {}", e));
-                                } else {
-                                    app.status_message =
-                                        Some("Configuration saved to config.toml!".to_string());
-                                }
-                            }
-                        }
-                        KeyCode::Char('w') | KeyCode::Char('W') => {
-                            // w/W: Write config to current theme
-                            app.write_to_current_theme();
+                    if is_cancel {
+                        app.should_quit = true;
+                    } else {
+                        match key.code {
+                        KeyCode::Char('s') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                            // Ctrl+S: Open save menu
+                            app.save_menu.open();
                         }
                         KeyCode::Up => {
                             if key.modifiers.contains(KeyModifiers::SHIFT) {
@@ -222,14 +251,10 @@ impl App {
                         }
                         KeyCode::Enter => app.toggle_current(),
                         KeyCode::Tab => app.switch_panel(),
-                        KeyCode::Char('1') => app.switch_to_theme("default"),
-                        KeyCode::Char('2') => app.switch_to_theme("minimal"),
-                        KeyCode::Char('3') => app.switch_to_theme("gruvbox"),
-                        KeyCode::Char('4') => app.switch_to_theme("nord"),
                         KeyCode::Char('p') => app.cycle_theme(),
-                        KeyCode::Char('r') => app.reset_to_theme_defaults(),
                         KeyCode::Char('e') | KeyCode::Char('E') => app.open_separator_editor(),
-                        _ => {}
+                            _ => {}
+                        }
                     }
                 }
             }
@@ -245,43 +270,6 @@ impl App {
         terminal.show_cursor()?;
 
         result
-    }
-
-    fn calculate_theme_selector_height(&self, total_width: u16) -> u16 {
-        // Get all available themes dynamically
-        let available_themes = crate::ui::themes::ThemePresets::list_available_themes();
-
-        // Calculate available width (minus borders only)
-        let content_width = total_width.saturating_sub(2); // Remove borders
-
-        // Simulate the line wrapping logic
-        let mut line_count = 1;
-        let mut current_line_length = 0;
-        let mut first_line = true;
-
-        for (i, theme) in available_themes.iter().enumerate() {
-            let marker = if self.config.theme == *theme {
-                "[✓]"
-            } else {
-                "[ ]"
-            };
-            let theme_part = format!("{} {}", marker, theme);
-            let separator = if i == 0 { "" } else { "  " };
-            let part_with_sep = format!("{}{}", separator, theme_part);
-
-            let would_fit = current_line_length + part_with_sep.len() <= content_width as usize;
-
-            if would_fit || first_line {
-                current_line_length += part_with_sep.len();
-                first_line = false;
-            } else {
-                line_count += 1;
-                current_line_length = theme_part.len();
-            }
-        }
-
-        // Return height: content lines + borders (top + bottom)
-        line_count + 2
     }
 
     fn calculate_help_height(&self, total_width: u16) -> u16 {
@@ -306,13 +294,9 @@ impl App {
                 "[Tab] Switch Panel",
                 "[Enter] Toggle/Edit",
                 "[Shift+↑↓] Reorder",
-                "[1-4] Theme",
-                "[P] Switch Theme",
-                "[R] Reset",
+                "[P] Cycle Theme",
                 "[E] Edit Separator",
-                "[S] Save Config",
-                "[W] Write Theme",
-                "[Ctrl+S] Save Theme",
+                "[Ctrl+S] Save",
                 "[Esc] Quit",
             ]
         };
@@ -350,17 +334,14 @@ impl App {
     }
 
     fn ui(&mut self, f: &mut Frame) {
-        // Calculate required heights for dynamic sections (using full width as estimate)
-        let theme_selector_height = self.calculate_theme_selector_height(f.area().width);
+        // Calculate required height for help
         let help_height = self.calculate_help_height(f.area().width);
 
         // Initial layout to measure preview width
         let initial_layout = Layout::default()
             .direction(Direction::Vertical)
             .constraints([
-                Constraint::Length(3),                     // Title
-                Constraint::Min(3),                        // Preview (dynamic - will recalculate)
-                Constraint::Length(theme_selector_height), // Theme selector (dynamic)
+                Constraint::Min(15),                       // Preview (dynamic - will recalculate)
                 Constraint::Min(10),                       // Main content
                 Constraint::Length(help_height),           // Help (dynamic)
             ])
@@ -368,7 +349,7 @@ impl App {
 
         // Update preview with measured width
         self.preview
-            .update_preview_with_width(&self.config, initial_layout[1].width);
+            .update_preview_with_width(&self.config, initial_layout[0].width);
 
         // Calculate actual preview height after content update
         let preview_height = self.preview.calculate_height();
@@ -377,42 +358,26 @@ impl App {
         let layout = Layout::default()
             .direction(Direction::Vertical)
             .constraints([
-                Constraint::Length(3),                     // Title
                 Constraint::Length(preview_height),        // Preview (dynamic)
-                Constraint::Length(theme_selector_height), // Theme selector (dynamic)
                 Constraint::Min(10),                       // Main content
                 Constraint::Length(help_height),           // Help (dynamic)
             ])
             .split(f.area());
 
-        // Title
-        let title_text = format!("CCometixLine Configurator v{}", env!("CARGO_PKG_VERSION"));
-        let title = Paragraph::new(title_text)
-            .block(Block::default().borders(Borders::ALL))
-            .style(Style::default().fg(Color::Cyan))
-            .alignment(ratatui::layout::Alignment::Center);
-        f.render_widget(title, layout[0]);
-
-        // Preview - use TUI-optimized statusline generation with smart segment wrapping
-        // Update preview if layout width differs from initial measurement
-        if layout[1].width != initial_layout[1].width {
-            self.preview
-                .update_preview_with_width(&self.config, layout[1].width);
-        }
-
         // Render preview
-        self.preview.render(f, layout[1]);
+        self.preview.render(f, layout[0]);
 
-        // Theme selector
-        self.theme_selector.render(f, layout[2], &self.config);
-
-        // Main content (split horizontally)
+        // Main content (split into 3 columns: Segments, Settings, Themes)
         let content_layout = Layout::default()
             .direction(Direction::Horizontal)
-            .constraints([Constraint::Percentage(30), Constraint::Percentage(70)])
-            .split(layout[3]);
+            .constraints([
+                Constraint::Percentage(25),  // Segments
+                Constraint::Percentage(50),  // Settings
+                Constraint::Percentage(25),  // Themes
+            ])
+            .split(layout[1]);
 
-        // Segment list
+        // Segment list (with separator above)
         self.segment_list.render(
             f,
             content_layout[0],
@@ -431,10 +396,13 @@ impl App {
             &self.selected_field,
         );
 
+        // Themes panel (0 = *Live*, 1+ = themes from list)
+        self.theme_selector.render(f, content_layout[2], &self.config, self.theme_cycle_index);
+
         // Help
         self.help.render(
             f,
-            layout[4],
+            layout[2],
             self.status_message.as_deref(),
             self.color_picker.is_open,
             self.icon_selector.is_open,
@@ -452,6 +420,9 @@ impl App {
         }
         if self.separator_editor.is_open {
             self.separator_editor.render(f, f.area());
+        }
+        if self.save_menu.is_open {
+            self.save_menu.render(f, f.area());
         }
     }
 
@@ -619,29 +590,28 @@ impl App {
 
     fn cycle_theme(&mut self) {
         let themes = crate::ui::themes::ThemePresets::list_available_themes();
-        let current_theme = &self.config.theme;
-        let current_index = themes.iter().position(|t| t == current_theme).unwrap_or(0);
-        let next_index = (current_index + 1) % themes.len();
-        let next_theme = &themes[next_index];
+        // Cycle includes *Live* (index 0) plus all themes (index 1+)
+        let total_options = themes.len() + 1;
+        self.theme_cycle_index = (self.theme_cycle_index + 1) % total_options;
 
-        self.status_message = Some(format!("Switching to theme: {}", next_theme));
-        self.switch_to_theme(next_theme);
+        if self.theme_cycle_index == 0 {
+            // *Live* - reload from config.toml
+            self.config = Config::load().unwrap_or_else(|_| Config::default());
+            self.preview.update_preview(&self.config);
+            self.status_message = Some("Reloaded *Live* config".to_string());
+        } else {
+            // Theme from list (1-indexed)
+            let theme_name = &themes[self.theme_cycle_index - 1];
+            self.status_message = Some(format!("Loading theme: {}", theme_name));
+            self.switch_to_theme(theme_name);
+        }
     }
 
     fn switch_to_theme(&mut self, theme_name: &str) {
         self.config = crate::ui::themes::ThemePresets::get_theme(theme_name);
         self.selected_segment = 0;
         self.preview.update_preview(&self.config);
-        self.status_message = Some(format!("Switched to {} theme", theme_name));
-    }
-
-    /// Reset current theme to its default configuration
-    fn reset_to_theme_defaults(&mut self) {
-        let current_theme = self.config.theme.clone();
-        self.config = crate::ui::themes::ThemePresets::get_theme(&current_theme);
-        self.selected_segment = 0;
-        self.preview.update_preview(&self.config);
-        self.status_message = Some(format!("Reset {} theme to defaults", current_theme));
+        self.status_message = Some(format!("Loaded {} theme (unsaved)", theme_name));
     }
 
     fn save_config(&mut self) -> Result<(), Box<dyn std::error::Error>> {
@@ -673,27 +643,11 @@ impl App {
         }
     }
 
-    /// Write current config to the current theme file
-    fn write_to_current_theme(&mut self) {
-        let current_theme = &self.config.theme;
-        match crate::ui::themes::ThemePresets::save_theme(current_theme, &self.config) {
-            Ok(_) => {
-                self.status_message = Some(format!("Wrote config to theme: {}", current_theme));
-            }
-            Err(e) => {
-                self.status_message =
-                    Some(format!("Failed to write to theme {}: {}", current_theme, e));
-            }
-        }
-    }
-
     /// Save current config as a new theme with the given name
     fn save_as_new_theme(&mut self, theme_name: &str) {
         match crate::ui::themes::ThemePresets::save_theme(theme_name, &self.config) {
             Ok(_) => {
-                // Update current theme to the new one
-                self.config.theme = theme_name.to_string();
-                self.status_message = Some(format!("Saved as new theme: {}", theme_name));
+                self.status_message = Some(format!("Saved as theme: {}", theme_name));
             }
             Err(e) => {
                 self.status_message = Some(format!("Failed to save theme {}: {}", theme_name, e));

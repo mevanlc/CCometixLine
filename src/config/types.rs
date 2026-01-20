@@ -6,6 +6,8 @@ use std::collections::HashMap;
 pub struct Config {
     pub style: StyleConfig,
     pub segments: Vec<SegmentConfig>,
+    /// Deprecated: theme field is ignored. Kept for backwards compatibility with old config files.
+    #[serde(default, skip_serializing)]
     pub theme: String,
 }
 
@@ -264,11 +266,6 @@ impl Config {
         }
 
         true
-    }
-
-    /// Check if current config has been modified from the selected theme
-    pub fn is_modified_from_theme(&self) -> bool {
-        !self.matches_theme(&self.theme)
     }
 
     /// Compare two segment configs for equality

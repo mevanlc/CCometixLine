@@ -5,6 +5,24 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.1.0] - 2026-01-20
+
+### Added
+- **Install Binary Menu Option**: New menu item to install/reinstall ccline to `~/.claude/ccline/ccline`
+
+### Changed
+- **Main Menu Redesign**: Card-based layout with dark background, diagonal selector indicators
+- **Configuration Mode Redesign**: Fuller preview showing simulated Claude Code context; 3-column layout (Segments, Settings, Themes); Separator field moved below segments list
+- **Config Auto-Init**: Config file is now automatically created from default theme on startup if missing
+- **Config/Theme Refactor**: *Live* config is now the single source of truth; themes are templates only
+- **Simplified Save Menu**: Ctrl+S now offers 2 options: "Overwrite *Live*" and "Save as named Theme"
+- **Deprecated Theme Field**: The `theme` field in config is now ignored (kept for backwards compatibility)
+
+### Removed
+- **Initialize Config Defaults**: Menu option removed (now handled automatically on startup)
+- **1-4 Theme Shortcuts**: Removed hardcoded keyboard shortcuts for theme switching
+- **Reset to Theme**: Removed [R] key binding and `reset_to_theme_defaults()` functionality
+
 ## [1.0.9] - 2025-12-21
 
 ### Added
