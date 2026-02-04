@@ -341,14 +341,15 @@ impl MainMenu {
         // Menu cards
         let menu_items = self.get_menu_items();
 
-        // Calculate card heights: 4 for all cards (2 content lines + 2 border lines)
+        // Calculate card heights: 4 for regular cards (2 content + 2 border), 3 for compact (1 content + 2 border)
         // Add 1-line spacers between cards
         let mut constraints: Vec<Constraint> = Vec::new();
-        for (i, _item) in menu_items.iter().enumerate() {
+        for (i, item) in menu_items.iter().enumerate() {
             if i > 0 {
                 constraints.push(Constraint::Length(1)); // Spacer between cards
             }
-            constraints.push(Constraint::Length(4));
+            let height = if item.compact { 3 } else { 4 };
+            constraints.push(Constraint::Length(height));
         }
         constraints.push(Constraint::Min(0)); // Spacer at bottom
 
@@ -386,10 +387,14 @@ impl MainMenu {
             };
 
             let card_content = if item.compact {
-                // Two lines for compact items (title + empty line for selector to fit)
+                // Single line for compact items
                 Text::from(vec![
                     Line::from(vec![
-                        sel1,
+                        if is_selected {
+                            Span::styled("> ", Style::default().fg(Color::Yellow))
+                        } else {
+                            Span::styled("  ", Style::default())
+                        },
                         Span::styled(
                             item.title.as_str(),
                             Style::default()
@@ -401,7 +406,6 @@ impl MainMenu {
                                 }),
                         ),
                     ]),
-                    Line::from(vec![sel2]),
                 ])
             } else {
                 // Two lines: title + description with diagonal selectors
